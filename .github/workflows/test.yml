@@ -1,0 +1,15 @@
+name: tests                     # name shown in the Actions tab
+
+on: [push, pull_request]        # run on every push and every pull request
+
+jobs:
+  test:
+    runs-on: ubuntu-latest      # a fresh Linux machine each time
+    steps:
+      - uses: actions/checkout@v4      # 1. download the repo
+      - uses: actions/setup-node@v4    # 2. install Node
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci                    # 3. install packages exactly as in package-lock.json
+      - run: npm test                  # 4. run the tests
