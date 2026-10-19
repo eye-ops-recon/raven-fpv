@@ -12,4 +12,5 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci                    # 3. install packages exactly as in package-lock.json
-      - run: npm test                  # 4. run the tests
+      - run: npx tsc --noEmit          # 4. spot type errors
+      - run: npm test                  # 5. run the tests

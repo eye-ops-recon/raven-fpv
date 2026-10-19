@@ -4,6 +4,7 @@ import { defaultParams } from './defaultParams';
 import { simulate } from './simulate';
 import { findStickForOutput } from './throttleCurve';
 import { netForce } from './forces';
+import { motorCommand } from '../physics/throttleCurve';
 
 const params = defaultParams;
 
@@ -15,7 +16,8 @@ describe('terminalVelocity', () => {
         assert(Math.abs(v) < 1e-5, `v = ${v}`);
     });
     it('Net force is 0 at hover stick', () => {
-        const F = netForce({z: 0, v: 0}, params, {stick: hoverStick});
+        const motorWhenStickAtHover = motorCommand(params, {stick: hoverStick});
+        const F = netForce({z: 0, v: 0, motor: motorWhenStickAtHover}, params);
         assert(Math.abs(F) < 1e-9, `F = ${F}`);
     });
 });
@@ -23,20 +25,23 @@ describe('terminalVelocity', () => {
 describe('Simulation approaches terminal Velocity', () => {
     it('Climbing full throttle', () => {
         const input = {stick: 1};
+        const motorAtStick = motorCommand(params, input)
         const expected = terminalVelocity(params, input);
-        const end = simulate({z: 1000, v: 0}, params, input, 30);
+        const end = simulate({z: 1000, v: 0, motor: motorAtStick}, params, input, 30);
         assert(Math.abs(end.v - expected) < 1e-6, `v = ${end.v}, beklenen = ${expected}`);
     });
     it('Free fall at 0 throttle', () => {
         const input = {stick: 0};
+        const motorAtStick = motorCommand(params, input)
         const expected = terminalVelocity(params, input);
-        const end = simulate({z: 1000, v: 0}, params, input, 30);
+        const end = simulate({z: 1000, v: 0, motor: motorAtStick}, params, input, 30);
         assert(Math.abs(end.v - expected) < 1e-6, `v = ${end.v}, beklenen = ${expected}`);
     });
     it('Slowing down while falling faster than the limit', () => {
         const input = {stick: 0};
+        const motorAtStick = motorCommand(params, input)
         const expected = terminalVelocity(params, input);
-        const end = simulate({z: 1000, v: -40}, params, input, 30);
+        const end = simulate({z: 1000, v: -40, motor: motorAtStick}, params, input, 30);
         assert(Math.abs(end.v - expected) < 1e-6, `v = ${end.v}, beklenen = ${expected}`);
     });
 });
@@ -51,9 +56,10 @@ describe('hoverControl', () => {
     assert(Math.abs(thrust - weight) < 1e-9, `thrust = ${thrust}, weight = ${weight}`);
     });
     it('Hover simulation', () => {
-        const input = {stick: findStickForOutput(motorHoverOutput(curvedParams), curvedParams.mid, curvedParams.expo)}
+        const u = motorHoverOutput(curvedParams);
+        const input = {stick: findStickForOutput(u, curvedParams.mid, curvedParams.expo)}
         const expected = {z: 10, v:0};
-        const end = simulate({z: 10, v:0}, curvedParams, input, 10, 0.01);
+        const end = simulate({z: 10, v:0, motor: u}, curvedParams, input, 10, 0.01);
         assert(Math.abs(expected.v - end.v) < 1e-9 && Math.abs(expected.z - end.z) < 1e-9, 
             `v = ${end.v}, beklenen = ${expected.v}   -   h = ${end.z}, beklenen = ${expected.z}`);
     });

@@ -1,6 +1,3 @@
-
-// For an increasing function solves the f(x) = target equation at [lo, hi] interval.
-
 export function bisect(
     f: (x: number) => number, 
     target: number, 
@@ -8,6 +5,9 @@ export function bisect(
     hi: number,
     iterations = 50
 ): number{
+
+    // For an increasing function solves the f(x) = target equation at [lo, hi] interval.
+
 
     const eps = 1e-12;
 

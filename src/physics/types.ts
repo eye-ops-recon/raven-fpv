@@ -1,6 +1,7 @@
 export type State = {
     z: number;                        // height
     v: number;                        // velocity
+    motor: number;                    // motor output
 };
 
 export type Params = {
@@ -12,7 +13,7 @@ export type Params = {
     readonly area: number;                     // Unit: Meter Square   Cross-sectional area perpendicular to the direction of motion
     readonly expo: number;                     // Ratio of mixture density at throttle curve     
     readonly mid: number;                      // Imaginary midpoint of the throttle curve
-    
+    readonly motorTau: number;                 // Time value of motors changing speed
 }
 
 export type Input = {

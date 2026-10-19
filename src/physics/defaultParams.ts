@@ -11,4 +11,5 @@ export const defaultParams: Params = {
     area: 0.02,                                     //meter square
     expo: 0,
     mid: 0.5,
+    motorTau: 0.033,
 };

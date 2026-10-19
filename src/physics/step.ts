@@ -1,12 +1,18 @@
 import type {State, Params, Input} from './types';
 import { netForce } from './forces';
+import { firstOrderLag } from '../math/firstOrderLag';
+import { motorCommand } from '../physics/throttleCurve';
 
 export function step(state: State, params: Params, input: Input, dt: number): State {
+    
+    const uTarget = motorCommand(params, input);
+    const uNext = firstOrderLag(state.motor, uTarget, params.motorTau, dt); // exact first-order lag (M2)
 
-    const f_net = netForce(state, params, input);
-    const a = f_net / params.mass
+    const motorUpdatedState = {...state, motor: uNext}; // force uses the updated motor (same idea as semi-implicit Euler)
+    const fNet = netForce(motorUpdatedState, params);
+    const a = fNet / params.mass;
 
-    const v_next = state.v + dt * a;
-    const z_next = (state.z + v_next * dt);    //semi-implicit Euler
-    return ({v: v_next, z: z_next});
+    const vNext = state.v + dt * a;
+    const zNext = (state.z + vNext * dt);    //semi-implicit Euler
+    return {v: vNext, z: zNext, motor: uNext};
 }

@@ -1,10 +1,12 @@
+import { motorCommand } from '../physics/throttleCurve';
 import { netForce } from './forces';
 import type {Params, Input} from './types';
  
 
 export function terminalVelocity(params : Params, input: Input): number{
-    const F = netForce({v: 0, z: 0}, params, input);
-    const k= 1/2 * params.cd * params.area * params.rho
+    const uTarget = motorCommand(params, input);
+    const F = netForce({v: 0, z: 0, motor: uTarget}, params);
+    const k = 1/2 * params.cd * params.area * params.rho;
     return Math.sign(F) * Math.sqrt(Math.abs(F) / k);
 }
 

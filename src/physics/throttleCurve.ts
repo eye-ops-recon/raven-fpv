@@ -1,4 +1,6 @@
 import { bisect } from "../math/solve";
+import type {Params, Input} from './types';
+
 
 export function applyThrottleCurve(stick: number, mid: number, expo: number): number{
     const t: number = stick - mid;                            // how far is stick from the mid
@@ -20,3 +22,8 @@ export function findStickForOutput(target: number, mid: number, expo: number): n
     
     return bisect(x => applyThrottleCurve(x, mid, expo), target , 0, 1);
 }
+
+export function motorCommand(params: Params, input: Input): number{
+    const stick = Math.min(1, Math.max(0, input.stick));               
+    return applyThrottleCurve(stick, params.mid, params.expo);
+};
