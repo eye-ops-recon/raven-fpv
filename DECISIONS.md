@@ -3,7 +3,7 @@
 This file records the engineering decisions behind Raven's physics engine.
 Entries are short on purpose.
 
-**IDs:** Each section has its own prefix (A, N, F, C, M, T). A new decision is added to the end of its section with the next number. IDs are never reused or renumbered, so references like "see C3" always stay valid. When a decision changes, the old entry stays and is marked **Superseded by <ID>**.
+**IDs:** Each section has its own prefix (A, N, F, C, M, G, T). A new decision is added to the end of its section with the next number. IDs are never reused or renumbered, so references like "see C3" always stay valid. When a decision changes, the old entry stays and is marked **Superseded by <ID>**.
 
 Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 
@@ -14,7 +14,10 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 | F | Forces |
 | C | Throttle curve |
 | M | Motor |
+| G | Ground |
 | T | Testing |
+
+Formulas, default values and their sources are listed in [docs/references.md](docs/references.md).
 
 ---
 
@@ -33,7 +36,7 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 
 ### A3. `State`, `Params` and `Input` are separate types
 - **Decision:**
-  - `State`: what changes every step (`z`, `v`).
+  - `State`: what changes every step (`z`, `v`, `motor`: the actual motor output, 0..1).
   - `Params`: properties of the drone and the world, constant during a run (mass, max thrust, drag, curve settings).
   - `Input`: what the pilot does (`stick`).
 - **Why:** Every quantity has one clear home. Rule for new quantities: *does it change during flight?* → `State`. *Is it a property of the drone or the world?* → `Params`. *Does the pilot control it?* → `Input`.
@@ -41,6 +44,7 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 ### A4. Folder structure: `physics/`, `math/`, `scripts/`, `ui/`
 - **Decision:** `math/` holds general tools with no physical meaning (`bisect`, `firstOrderLag`). `physics/` holds the model. `scripts/` holds small runnable tools (`hoverTable.ts`). Tests sit next to the file they test (`x.ts` ↔ `x.test.ts`).
 - **Why:** A reader can find the code for any concept by name, and `math/` can be reused anywhere.
+- **Dependency rule:** `physics/` may import from `math/`, never the other way around. A file in `math/` that needs `Params` or `Input` belongs in `physics/` (this is why `motorCommand` lives in `physics/throttleCurve.ts`).
 
 ### A5. SI units inside, datasheet units only at the edge
 - **Decision:** Motor datasheets give thrust in gram-force per motor. It is converted once, in `defaultParams`: `maxThrust = 4 * 1500 / 1000 * GRAVITY` (N). Everything inside the engine is kg, m, s, N.
@@ -49,6 +53,11 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 ### A6. One default parameter set, overridden with spread
 - **Decision:** `defaultParams` is the single source of truth. Experiments override only what they change: `{ ...defaultParams, expo: 0.5 }`. `GRAVITY` is an exported constant.
 - **Why:** A test shows exactly which parameter it is about, with no copy-pasted parameter blocks drifting apart.
+
+### A7. The timestep is not a drone parameter
+- **Decision:** `dt` is passed to `step` and `simulate`, not stored in `Params`.
+- **Why:** `Params` holds things that exist on the real drone (mass, thrust, τ). The real drone has no timestep; `dt` belongs to the numerical method. Keeping them apart lets the same drone be simulated at different `dt` (used in tests).
+- **Later:** The flight controller's loop rate (PID stage) is a real property of the controller and will live in its own settings, separate from the physics `dt`.
 
 ---
 
@@ -67,12 +76,18 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Why:** A fixed `dt` keeps runs deterministic. Rounding protects against floating-point division results like 99.99999 turning into an off-by-one step count.
 - **Alternatives:** Variable `dt` from frame time: different results on different computers. The future render loop will consume fixed physics steps instead.
 
+### N3. Order inside one step: command → motor → force → velocity → position → ground
+- **Decision:** `step` first computes the motor command from the stick, then updates the motor with the lag, then computes the air force **with the updated motor** and adds the ground's normal force (G1), then velocity, then position, and finally applies the ground constraint (G1).
+- **Why:** Same idea as N1: always use the freshest value. Computing the force with the old motor would add an artificial one-step delay (10 ms) on top of the real lag (τ = 33 ms). With τ = 0 this order reproduces the K5 behaviour exactly, so the older tests stay valid.
+- **Alternatives:** Force first, motor after: one extra step of delay, and τ = 0 would still lag by one step.
+- **Detail:** The force is computed from `{ ...state, motor: next }`, so `airForce` only ever sees one motor value.
+
 ---
 
 ## Forces
 
-### F1. Net force is computed in exactly one place
-- **Decision:** `netForce(state, params, input) = thrust − weight − drag`. Both `step` and the analysis functions call it.
+### F1. Air forces are computed in exactly one place
+- **Decision:** `airForce(state, params) = thrust − weight − drag`: every force except ground contact. Both `step` and the analysis functions call it. (Until K6 it also took `input`, see F6. Until K7 it was called `netForce`, see G3.)
 - **Why:** Analysis code reuses the model instead of re-deriving it, so the two can never disagree.
 
 ### F2. Quadratic drag written as `v · |v|`
@@ -82,8 +97,9 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Evidence:** Terminal velocity tests for climbing, free fall, and starting from −40 m/s all converge to the analytic value.
 
 ### F3. Terminal velocity has an analytic function
-- **Decision:** `v_t = sign(F) · √(|F| / k)`, where `F = netForce` at `v = 0` and `k = ½ρ·Cd·A`.
+- **Decision:** `v_t = sign(F) · √(|F| / k)`, where `F = airForce` of the state `{ v: 0, motor: command }` and `k = ½ρ·Cd·A`.
 - **Why:** It gives simulation tests an expected value that does not come from the simulation itself.
+- **Detail:** `v = 0` switches drag off, so `airForce` returns thrust − weight. `motor = command` because at terminal velocity the motor has long since caught up with its command (seconds vs. τ = 33 ms).
 
 ### F4. Thrust grows with the square of motor output
 - **Decision:** `T = maxThrust · u²` (u = motor output, 0..1).
@@ -97,12 +113,16 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Alternatives:** `rho = 1` (a round number that made early hand calculations easy, used until K5). Altitude- and temperature-dependent density (possible later; air at 1000 m is about 10% thinner).
 - **Effect:** Only drag depends on rho. Hover output does not change (drag is zero at v = 0). Terminal velocities change by a factor of √(1/1.225) ≈ 0.90, since `v_t ∝ 1/√ρ`.
 
+### F6. Forces depend on the state, not on the stick
+- **Decision:** `airForce` (then `netForce`) no longer takes `input`. Thrust is computed from `state.motor`.
+- **Why:** Since K6 the stick reaches the physics only through the motor, just like on the real drone. The pilot is not part of the physics (A3); `input` is used only in `step`, to compute the motor command.
+
 ---
 
 ## Throttle curve
 
 ### C1. Two-stage chain: stick → curve → motor output → thrust
-- **Decision:** The throttle curve (a flight controller setting) and thrust (physics) are separate functions in separate files. The stick is clamped to [0, 1] before the curve.
+- **Decision:** The throttle curve (a flight controller setting) and thrust (physics) are separate functions in separate files. The stick is clamped to [0, 1] before the curve (see C5). Since K6 the chain has one more link: stick → curve → **command** → lag → motor output → thrust (M1).
 - **Why:** A lesson can show each stage on its own, and changing the curve never touches the physics.
 
 ### C2. Betaflight-style mid/expo curve
@@ -121,6 +141,12 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Decision:** The inverse is used only for analysis (hover stick, tables). The simulation never inverts anything.
 - **Why:** The real drone works forward too: the pilot moves the stick, the motors respond.
 
+### C5. Stick → command in one function
+- **Decision:** `motorCommand(params, input)` clamps the stick and applies the curve. `step` and `terminalVelocity` both call it.
+- **Why:** The rule "how a stick becomes a motor command" lives in one place. Future additions (motor idle, PID correction) change it once, and simulation and analysis can never disagree.
+- **Alternatives:** Repeating the two lines in each caller. Works today, but the copies drift apart the first time one of them changes.
+- **Recomputed every step:** The command is not cached. It costs nanoseconds, it is always up to date, and once PID exists it changes every step anyway. Real flight controllers do the same.
+
 ---
 
 ## Motor
@@ -130,6 +156,7 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Why:** A real motor and propeller have inertia and cannot change rpm instantly. Without lag, a PID tuned in the simulator would not work on a real drone.
 - **Where things live (A3):** The actual output changes every step → `State`. τ is a property of the motor → `Params`. The command is derived from `Input` and `Params`, so it is not stored.
 - **Alternatives:** No lag (thrust follows the stick instantly; unrealistic). A full motor model with rotor inertia, torque and battery voltage (possible later, needs real motor data).
+- **Evidence:** `step.test.ts`: in a full simulation, after one τ the motor has closed 0.6321205588285554 of the gap (1 − 1/e = 0.6321205588285577).
 
 ### M2. Exact solution instead of Euler for the lag
 - **Decision:** `next = target + (current − target) · e^(−dt/τ)`, in `src/math/firstOrderLag.ts`.
@@ -152,6 +179,36 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 
 ---
 
+## Ground
+
+### G1. The ground is a normal force while resting, plus a constraint on landing
+- **Decision:** `physics/ground.ts` has three functions:
+  - `isOnGround(state)`: `z <= 0`.
+  - `normalForce(state, airForce)`: on the ground and pushed down (`airForce < 0`) → returns `−airForce`; otherwise 0.
+  - `applyGroundConstraint(state)`: at the end of `step`, if the drone is at or below the ground → returns a new state with `z = 0`, `v = 0`; otherwise the state unchanged.
+- **Why:** Acceleration is never "set to zero"; the ground is just another force. It pushes exactly as much as needed and never pulls, so Newton's law holds and takeoff happens by itself once thrust exceeds weight. The constraint handles the other case: a falling drone crosses the ground during a step, which is only visible at the end of that step. Every state returned by `step` is physically valid.
+- **Alternatives:**
+  - Clamp only `z`: `v` keeps growing negative while the drone rests, so takeoff is late.
+  - Correct at the start of the *next* step: every returned state sits ~1 mm below the ground with `v = −0.098`, and the last state of a simulation stays below the ground.
+  - Spring-damper ground: realistic landing gear, but needs a much smaller dt and jitters (see the spring in N1).
+- **Evidence:** `ground.test.ts`: a drop from 10 m never goes below the ground and ends at exactly `z = 0, v = 0`; 10 s at rest at zero throttle stays exactly 0; clean takeoff (G4).
+
+### G2. Landing does not bounce
+- **Decision:** On contact `v = 0` (perfectly inelastic).
+- **Why:** FPV quads barely bounce, and it is the simplest correct behaviour. The impact energy goes into heat, sound and deformation in reality.
+- **Alternatives:** Restitution `v = −e·v` with 0 ≤ e ≤ 1 (deferred).
+
+### G3. Ground logic is kept apart from the air forces
+- **Decision:** `airForce` contains no ground logic; the ground lives in `ground.ts` and is combined in `step`. `netForce` was renamed `airForce`.
+- **Why:** `terminalVelocity` builds a helper state with `z = 0`. If the air force included the ground, that state would count as "on the ground" and the free-fall terminal velocity would come out as 0 instead of −21.9 m/s. The new name is true everywhere: in the air the air force *is* the net force, on the ground the net force is `airForce + normalForce`.
+
+### G4. Takeoff delay has an analytic function
+- **Decision:** `takeoffDelay(state, params, input)` in `analysis.ts`: `t = −τ · ln(1 − (u_hover − u₀) / (target − u₀))`, with `u₀ = state.motor`. Returns 0 if the motor is already at or above hover output, `Infinity` if the target is at or below it. Assumes the drone rests on the ground (`v = 0`).
+- **Why:** It gives the takeoff test an independent expected value (T1), and it is a number worth showing in the motor lag lesson: at full throttle from a stopped motor the drone waits ≈ 12.5 ms before it lifts.
+- **Evidence:** Simulated with dt = 1 ms the drone lifts at 13 ms; the formula gives 12.544 ms. Within one dt, never earlier (T5).
+
+---
+
 ## Testing
 
 ### T1. Expected values come from an independent source
@@ -162,6 +219,19 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Decision:** Plain `|actual − expected| < tol`, with `tol` chosen per quantity.
 - **Why:** The square root amplifies tiny errors. At hover, net force is checked to 1e-9, but terminal velocity only to 1e-5: a leftover force of ~1e-14 N becomes ~1e-6 m/s after the square root.
 
+### T3. A test must be able to fail
+- **Decision:** Always compare with `Math.abs(actual − expected) < tol`. When a test is new, break the code on purpose (e.g. `return current;`) and check that the test fails.
+- **Why:** `actual − expected < tol` without `Math.abs` passes for every value below the target, even if nothing moves. A test that cannot fail tests nothing.
+
+### T4. One test, one thing; each test builds its own state
+- **Decision:** Parts a test is not about are set up in their simplest form (e.g. terminal velocity tests start the motor at its command). State is created inside each `it`, never shared at file level.
+- **Why:** A failing test should point to one cause. Shared mutable state makes results depend on test order.
+
+### T5. Events are detected within one step
+- **Decision:** When a test measures *when* something happens (e.g. takeoff), it checks `measured ≥ expected` and `measured − expected ≤ dt`, not a tiny tolerance.
+- **Why:** The simulation only sees the world at the end of each step. An event between two steps is first seen at the next step: never early, at most one dt late.
+- **Exact zeros:** Where the code writes an exact value (the ground constraint writes `z = 0`, `v = 0`), the test uses `===`. "No jitter" is then checked in its strongest form.
+
 ---
 
 ## Deferred
@@ -169,6 +239,9 @@ Each entry: **Decision** · **Why** · **Alternatives** · **Evidence**.
 - **Wind:** vertical gusts with the PID stage; horizontal wind in 3D, as relative airspeed (`v − v_wind`) inside the drag formula. Wind is an input of the world, not part of `State`.
 - **RK4 integrator:** only if 3D needs more accuracy.
 - **Real propeller model:** only if real flight data shows the u² model is not enough.
+- **Ground effect:** near the ground, the same motor output gives more thrust (air cushion under the props; strong on ducted cinewhoops like the Cinelog35). Single-rotor model: `T_IGE / T_OGE = 1 / (1 − (R / 4z)²)` (Cheeseman–Bennett, 1955), noticeable below about one prop diameter. Deferred to 3D: the realistic version is per motor, since a tilted drone has each motor at a different height, which also creates a torque.
+- **Bouncing on landing:** restitution coefficient (G2). Until 3D.
+- **Motor idle:** armed motors spin at a small idle output even at zero stick (Betaflight motor idle). Deferred to 2D. `takeoffDelay` already supports a non-zero starting motor.
 
 ---
 
@@ -179,3 +252,10 @@ Bugs that changed how the code is written:
 - **Drone climbed to 151 m in a hover test.** The hover stick was computed with one parameter set and simulated with another. Rule: derive test inputs from the exact `params` object being simulated.
 - **`^` is XOR in TypeScript, not power.** The curve returned nonsense until `t^3` became `t**3`.
 - **`simulate` looped `i < duration`** (seconds) instead of the number of steps. Fixed by N2.
+- **Stick vs. motor output (K6).** A hover test started the motor at the hover *stick* (0.22) instead of the hover *output* (0.32). It only showed up with expo ≠ 0, where the two differ. Rule: keep the two links of the chain apart, and test with curved params.
+- **A test kept passing after it lost its purpose (K6).** While updating the tests, "slowing down from −40 m/s" was changed to start at `v = 0` and became a copy of the free-fall test. Still green, testing nothing new. Rule: when editing a test, re-read its name.
+- **Ratio vs. value (K6).** `1 − 1/e` is the fraction of the gap closed, not the motor value. With target 0.9 the motor is at `0.9 · (1 − 1/e)`.
+- **Inverted conditions (K7).** The first `normalForce` had its two branches swapped (the ground pulled the drone down at takeoff), and a test asserted `z < 0` instead of `z >= 0`. Rule: check every condition against one concrete number before running.
+- **`const copy = state` is not a copy (K7).** Objects are held by reference, like `State&` in C++. Changing the "copy" would change the caller's state and break A2. Rule: use spread, `{ ...state, z: 0 }`.
+- **Fixing it later leaks bad states (K7).** Correcting "below the ground" at the start of the next step left every returned state 1 mm under the ground. Rule: a function returns only valid states; fix things in the same step.
+- **Wrong guard variable (K7).** `takeoffDelay` checked `target > uHover` instead of `state.motor >= uHover`, so it always returned 0. The takeoff test caught it.

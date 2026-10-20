@@ -1,8 +1,8 @@
-import { motorHoverOutput } from "../physics/analysis";
+import { motorOutputAtHover } from "../physics/analysis";
 import { defaultParams } from "../physics/defaultParams";
 import { findStickForOutput } from "../physics/throttleCurve";
 
-const hoverOutput = motorHoverOutput(defaultParams);
+const hoverOutput = motorOutputAtHover(defaultParams);
 
 const settings: [number, number][] = [
     [0.5, 0],

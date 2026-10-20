@@ -1,14 +1,14 @@
 import { describe, it, assert } from 'vitest';
-import { motorHoverOutput, terminalVelocity } from './analysis';     
+import { motorOutputAtHover, terminalVelocity } from './analysis';     
 import { defaultParams } from './defaultParams';
 import { simulate } from './simulate';
 import { findStickForOutput } from './throttleCurve';
-import { netForce } from './forces';
+import { airForce } from './forces';
 import { motorCommand } from '../physics/throttleCurve';
 
 const params = defaultParams;
 
-const hoverStick = findStickForOutput(motorHoverOutput(params), params.mid, params.expo);
+const hoverStick = findStickForOutput(motorOutputAtHover(params), params.mid, params.expo);
 
 describe('terminalVelocity', () => {
     it('Terminal velocity is ~0 at hover stick', () => {
@@ -17,7 +17,7 @@ describe('terminalVelocity', () => {
     });
     it('Net force is 0 at hover stick', () => {
         const motorWhenStickAtHover = motorCommand(params, {stick: hoverStick});
-        const F = netForce({z: 0, v: 0, motor: motorWhenStickAtHover}, params);
+        const F = airForce({z: 0, v: 0, motor: motorWhenStickAtHover}, params);
         assert(Math.abs(F) < 1e-9, `F = ${F}`);
     });
 });
@@ -50,13 +50,13 @@ const curvedParams = {...defaultParams, mid: 0.5, expo: 0.5};
 
 describe('hoverControl', () => {
     it('Thrust at hover output equals weight', () => {
-    const u = motorHoverOutput(params);
+    const u = motorOutputAtHover(params);
     const thrust = params.maxThrust * u ** 2;
     const weight = params.mass * params.gravity;
     assert(Math.abs(thrust - weight) < 1e-9, `thrust = ${thrust}, weight = ${weight}`);
     });
     it('Hover simulation', () => {
-        const u = motorHoverOutput(curvedParams);
+        const u = motorOutputAtHover(curvedParams);
         const input = {stick: findStickForOutput(u, curvedParams.mid, curvedParams.expo)}
         const expected = {z: 10, v:0};
         const end = simulate({z: 10, v:0, motor: u}, curvedParams, input, 10, 0.01);

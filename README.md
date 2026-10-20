@@ -19,7 +19,7 @@ Work in progress. Phase 1 (vertical motion) is being built. The first public rel
 | K4 | Drag and terminal velocity | ✅ |
 | K5 | Stick → throttle curve → thrust | ✅ |
 | K6 | Motor lag | ✅ |
-| K7 | Ground contact | ⏳ |
+| K7 | Ground contact | ✅ |
 | K8 | Input recording and playback | ⏳ |
 | K9 | Visualization | ⏳ |
 | K10 | First lesson | ⏳ |
@@ -44,8 +44,9 @@ npx tsx src/scripts/hoverTable.ts   # hover stick for different curve settings
 ```
 docs/
   derivations/   step-by-step math behind the formulas
+  references.md  every formula and default value, with its source
 src/
-  physics/       the model: types, params, forces, step, simulate, throttle curve, analysis
+  physics/       the model: types, params, forces, ground, step, simulate, throttle curve, analysis
   math/          general math tools (bisection solver, first-order lag)
   scripts/       small runnable tools
   ui/            browser side (coming in K9)
@@ -59,20 +60,22 @@ Physics never imports UI code (see [DECISIONS.md](DECISIONS.md), A1).
 Vertical axis only.
 
 ```
-net force = thrust − weight − drag
+command   = throttleCurve(stick, mid, expo)    commanded motor output (0..1)
+u         → command, time constant τ           actual motor output, first-order lag
+thrust    = maxThrust · u²
+drag      = ½ · ρ · Cd · A · v · |v|            ρ = 1.225 kg/m³ (sea level)
 
-command = throttleCurve(stick, mid, expo)    commanded motor output (0..1)
-u       → command, time constant τ           actual motor output, first-order lag
-thrust  = maxThrust · u²
-drag    = ½ · ρ · Cd · A · v · |v|            ρ = 1.225 kg/m³ (sea level)
+air force = thrust − weight − drag
+ground    = pushes back exactly as much as needed while resting, never pulls
+net force = air force + ground
 ```
 
-Integrated with semi-implicit Euler at a fixed `dt = 0.01 s`. The motor lag uses its exact solution instead of Euler.
+Integrated with semi-implicit Euler at a fixed `dt = 0.01 s`. The motor lag uses its exact solution instead of Euler. A landing drone stops on the ground without bouncing.
 
 ## Design decisions
 
 Every non-obvious choice, and the alternatives that were rejected, is recorded in [DECISIONS.md](DECISIONS.md).
-The math behind the formulas is derived step by step in [docs/derivations](docs/derivations).
+The math behind the formulas is derived step by step in [docs/derivations](docs/derivations), and every formula and default value is traced to its source in [docs/references.md](docs/references.md).
 
 ## Contributing
 

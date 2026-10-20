@@ -1,6 +1,6 @@
 import type {State, Params} from './types';
 
-export function netForce(state: State, params: Params): number{
+export function airForce(state: State, params: Params): number{
     
     const T = params.maxThrust * state.motor**2;
     const weight = params.gravity * params.mass;
@@ -15,4 +15,3 @@ function calculateAirResistance(v: number, params: Params): number{
 
     return airResistance;
 }
-

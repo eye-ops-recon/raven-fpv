@@ -21,9 +21,5 @@ describe('step: motor lag', () => {
         `Closed Difference: ${diff}, 
         stage 1 speed, height, motor: ${stage1.v}, ${stage1.z}, ${stage1.motor}
         end speed, height, motor: ${state.v}, ${state.z}, ${state.motor}`);
-
-        console.log(`Closed Difference: ${diff}, 
-        stage 1 speed, height, motor: ${stage1.v}, ${stage1.z}, ${stage1.motor}
-        end speed, height, motor: ${state.v}, ${state.z}, ${state.motor}`);
     });
 });
