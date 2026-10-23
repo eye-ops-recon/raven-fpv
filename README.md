@@ -20,7 +20,7 @@ Work in progress. Phase 1 (vertical motion) is being built. The first public rel
 | K5 | Stick → throttle curve → thrust | ✅ |
 | K6 | Motor lag | ✅ |
 | K7 | Ground contact | ✅ |
-| K8 | Input recording and playback | ⏳ |
+| K8 | Input recording and playback | ✅ |
 | K9 | Visualization | ⏳ |
 | K10 | First lesson | ⏳ |
 

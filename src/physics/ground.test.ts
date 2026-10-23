@@ -1,5 +1,4 @@
 import { describe, it, assert } from "vitest";
-import { simulate } from "./simulate";
 import { defaultParams } from "./defaultParams";
 import { step } from "./step";
 import { takeoffDelay } from "./analysis";
@@ -12,7 +11,7 @@ describe("ground", () => {
         let state = {v: 0, z: 10, motor: 0};
         const input = {stick: 0};
         for(let i = 0; i < Math.round(duration / dt); i++){
-            state = simulate(state, defaultParams, input, dt, dt);
+            state = step(state, defaultParams, input, dt);
             assert(state.z >= 0, `z: ${state.z}`);
         }
         assert(state.v === 0 && state.z === 0, `v = ${state.v}, z = ${state.z}`);

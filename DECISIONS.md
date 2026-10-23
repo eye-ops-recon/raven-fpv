@@ -59,6 +59,43 @@ Formulas, default values and their sources are listed in [docs/references.md](do
 - **Why:** `Params` holds things that exist on the real drone (mass, thrust, τ). The real drone has no timestep; `dt` belongs to the numerical method. Keeping them apart lets the same drone be simulated at different `dt` (used in tests).
 - **Later:** The flight controller's loop rate (PID stage) is a real property of the controller and will live in its own settings, separate from the physics `dt`.
 
+### A8. Record the input, not the result
+- **Decision:** A recording stores what the pilot did (the stick over time). The flight is recomputed from it on every playback.
+- **Why:** The same hand movement can be replayed with different settings (expo 0 vs 0.5, later wind on vs off), so a reader sees the effect of one setting on their own movement. This is the core of an interactive lesson.
+- **Cost:** Playback only reproduces the flight if the simulation is deterministic (N5).
+- **Alternatives:** Storing the resulting states: always plays back the same flight, and cannot be replayed with other settings.
+
+### A9. `simulate` takes a list of inputs and returns every state
+- **Decision:** `simulate(start, params, inputs: readonly Input[], dt) → State[]`. One step per input. The result has `inputs.length + 1` states and starts with `start`. There is no `duration` parameter.
+- **Why:**
+  - The stick changes during a flight (recordings, lessons), so one fixed input is not enough.
+  - The step count comes from the list itself. A separate `duration` could disagree with the list: 600 steps over 500 inputs reads `inputs[500]`, which is `undefined`, and the step throws a `TypeError`.
+  - Every state is needed by the determinism test (N5), the graphs and the playback cursor (K9). Callers that only need the end take the last element.
+- **Alternatives:**
+  - A function `(k) => Input`: more general, but every constant-stick test becomes a lambda.
+  - Two functions (end state only, full trajectory): the same loop in two places drifts apart (see C5).
+- **Memory:** 5 s at `dt = 0.01` is 501 states, about 25 KB. Not a concern.
+- **Detail:** `readonly` turns `shift()` or `sort()` on the list into a compile error, like `const std::vector<Input>&`. `states[0]` is the caller's `start` object itself, not a copy; this is safe because nothing mutates a state (A2).
+- **Evidence:** `simulate.test.ts`: length is `inputs.length + 1`; first element equals `start`; determinism (N5). All older tests were migrated to the new signature.
+
+### A10. Input lists are built from small pieces
+- **Decision:** `createConstantInputArray(input, seconds, dt)` returns `Math.round(seconds / dt)` copies of `input`. Longer sequences are joined with the language itself: `[...a, ...b]` or `[a, b].flat()`. There is no wrapper function for joining.
+- **Why:** One small function with no modes covers constant-stick tests, multi-stage lessons (`[...ground, ...hover, ...fullThrottle]`) and "keep flying after the recording ends" (`[...recorded, ...hold]`). New shapes (e.g. a ramp) become new pieces that join the same way. A join wrapper would add a name to learn and no behaviour.
+- **Location:** `physics/`, not `math/`, because it knows `Input` (A4).
+- **Rules:**
+  - `seconds = 0` → empty list. A lesson slider set to 0 is a valid request.
+  - `seconds < 0` or `dt <= 0` → throws. Without the `dt` check, `dt = 0` loops forever: `5 / 0` is `Infinity` in JS, not an error.
+  - Step count by rounding, as in N2: `0.29 / 0.01` is `28.999999999999996`.
+- **Note:** Join long lists with array spread, not `arr.push(...big)`. Spread *arguments* hit the engine's argument limit (around 100k).
+- **Evidence:** `createConstantInputArray.test.ts`: 0.29 s → 29 elements (catches `floor`); values copied; 0 s → empty; `dt = 0`, `dt < 0` and `seconds < 0` throw (T6).
+
+### A11. `dt` is not stored with the input list
+- **Decision:** An input list is a plain `Input[]`. The caller passes the same `dt` to the list builder and to `simulate`.
+- **Why:** Keeps `dt` flexible: the same drone and the same pieces can be simulated at different `dt` in tests (A7).
+- **Alternatives:** A list that carries its own `dt` (`{ dt, inputs }`), like a WAV file that stores its sample rate; `simulate` would read `dt` from it, so a mismatch would be impossible. Rejected for now.
+- **Risk:** A mismatch is silent. A 5 s list built at `dt = 0.01` (500 inputs) and simulated at `dt = 0.001` flies for 0.5 s, with the stick movements 10 times faster. Rule: one `const dt` per test, used in both calls.
+- **Evidence of the risk:** Lessons learned, "a signature change moved the meaning of an argument".
+
 ---
 
 ## Numerical method
@@ -72,6 +109,7 @@ Formulas, default values and their sources are listed in [docs/references.md](do
 - **Evidence:** Spring experiment (Euler Lab); free-fall test against `z = z0 − ½·g·t²`, whose first-order error (≈ ½·g·t·dt) sets the test tolerance.
 
 ### N2. Fixed timestep; step count by rounding
+**Partly superseded by A9 and A10:** `simulate` now runs one step per input; the rounding moved to `createConstantInputArray`. The fixed timestep still holds.
 - **Decision:** `dt = 0.01 s` by default; `simulate` runs `Math.round(duration / dt)` steps.
 - **Why:** A fixed `dt` keeps runs deterministic. Rounding protects against floating-point division results like 99.99999 turning into an off-by-one step count.
 - **Alternatives:** Variable `dt` from frame time: different results on different computers. The future render loop will consume fixed physics steps instead.
@@ -81,6 +119,26 @@ Formulas, default values and their sources are listed in [docs/references.md](do
 - **Why:** Same idea as N1: always use the freshest value. Computing the force with the old motor would add an artificial one-step delay (10 ms) on top of the real lag (τ = 33 ms). With τ = 0 this order reproduces the K5 behaviour exactly, so the older tests stay valid.
 - **Alternatives:** Force first, motor after: one extra step of delay, and τ = 0 would still lag by one step.
 - **Detail:** The force is computed from `{ ...state, motor: next }`, so `airForce` only ever sees one motor value.
+
+### N4. Recorded input is resampled by sample-and-hold
+- **Decision:** Step `k` uses the last recorded sample with `t ≤ k·dt` (zero-order hold). The step time is computed as `k * dt`, never accumulated with `t += dt`.
+- **Why:**
+  - A real flight controller does the same: RC packets arrive at their own rate and the FC holds the last value.
+  - It never looks ahead, so the same rule works for live input.
+  - `k * dt` stays on the grid; `t += dt` drifts. Adding `0.01` ten times gives `0.09999999999999999`, so a sample at exactly 0.1 s would be picked up one step late. After 100 additions the sum is `1.0000000000000007`.
+- **Alternatives:**
+  - Linear interpolation between samples: smoother, but step `k` would use a sample from after `k·dt`, i.e. look into the future. Possible for playback, impossible live.
+  - Smoothing, if needed, becomes a separate link in the chain, like Betaflight's RC smoothing (C1), not something hidden in the recorder.
+- **Detail:** A movement shorter than one step can be lost: a sample that arrives and is replaced between two steps is never used. The real FC has the same limit.
+- **Evidence:** Added with the resampling function. Expected values come from a hand-calculated table: samples at 0, 0.017, 0.032, 0.038 and 0.052 s with sticks 0, 0.2, 0.5, 0.6, 0.8 give steps 0–5 the sticks 0, 0, 0.2, 0.2, 0.6, 0.6 (0.5 is never used). Tests passed.
+
+### N5. Determinism: bit-identical within one JS engine
+- **Decision:** The same `start`, `params`, input list and `dt` give the same states, compared with exact equality, not a tolerance.
+- **Why:** Recording and playback (A8) only work if replaying an input list reproduces the flight. JS arithmetic (`+ − × ÷`) is fixed by IEEE 754, and `step` is pure (A2).
+- **Scope:** The JS standard only requires `Math.exp` (motor lag, M2) and `**` (throttle curve, C2) to be approximately correct, so different engines (Chrome, Firefox, Safari) may differ in the last digit. The guarantee is bit-identical results within one JS engine. The difference is invisible in graphs, and tests run in Node.
+- **What would break it:** hidden state (a module-level counter, consuming the input list with `shift()`), choosing the input by wall-clock time instead of the step index, unseeded randomness (`Math.random()`).
+- **Evidence:** `simulate.test.ts`: an input list of four stick levels (40 s at `dt = 1 ms`), simulated twice; all 40 001 states are equal (`toEqual`). Mutation: a module-level call counter that adds `calls · 1e-12` to the stick turns the test red.
+- **Known cost:** A failing run takes about 10 s, because Vitest builds a diff of every differing state. Accepted: it only happens when the test fails.
 
 ---
 
@@ -232,11 +290,15 @@ Formulas, default values and their sources are listed in [docs/references.md](do
 - **Why:** The simulation only sees the world at the end of each step. An event between two steps is first seen at the next step: never early, at most one dt late.
 - **Exact zeros:** Where the code writes an exact value (the ground constraint writes `z = 0`, `v = 0`), the test uses `===`. "No jitter" is then checked in its strongest form.
 
+### T6. Error tests match the message
+- **Decision:** A test that expects an error also checks its message: `expect(fn).toThrow("dt")`.
+- **Why:** `throws` passes for any error. With the `dt <= 0` check removed, the `dt = 0` test still passed: the endless loop made V8 throw its own `RangeError`.
+
 ---
 
 ## Deferred
 
-- **Wind:** vertical gusts with the PID stage; horizontal wind in 3D, as relative airspeed (`v − v_wind`) inside the drag formula. Wind is an input of the world, not part of `State`.
+- **Wind:** vertical gusts with the PID stage; horizontal wind in 3D, as relative airspeed (`v − v_wind`) inside the drag formula. Wind is an input of the world, not part of `State`. It keeps the simulation deterministic (N5) if it is recorded or generated from a fixed seed; then the same recording can be replayed with wind on and off (A8).
 - **RK4 integrator:** only if 3D needs more accuracy.
 - **Real propeller model:** only if real flight data shows the u² model is not enough.
 - **Ground effect:** near the ground, the same motor output gives more thrust (air cushion under the props; strong on ducted cinewhoops like the Cinelog35). Single-rotor model: `T_IGE / T_OGE = 1 / (1 − (R / 4z)²)` (Cheeseman–Bennett, 1955), noticeable below about one prop diameter. Deferred to 3D: the realistic version is per motor, since a tilted drone has each motor at a different height, which also creates a torque.
@@ -259,3 +321,7 @@ Bugs that changed how the code is written:
 - **`const copy = state` is not a copy (K7).** Objects are held by reference, like `State&` in C++. Changing the "copy" would change the caller's state and break A2. Rule: use spread, `{ ...state, z: 0 }`.
 - **Fixing it later leaks bad states (K7).** Correcting "below the ground" at the start of the next step left every returned state 1 mm under the ground. Rule: a function returns only valid states; fix things in the same step.
 - **Wrong guard variable (K7).** `takeoffDelay` checked `target > uHover` instead of `state.motor >= uHover`, so it always returned 0. The takeoff test caught it.
+- **`assert(x = 5)` always passes (K8).** `assert(result.length = 49000)` assigns instead of comparing; the assignment returns 49000, which is truthy, so the test could never fail. Rule: use `expect(actual).toBe(expected)`, which keeps the two values apart.
+- **Copy-pasted tests (K8).** Three new tests were named for `dt < 0`, `seconds < 0` and `seconds = 0` but still ran with the old values. A field check read `state.v === states[0].v && state.v === states[0].v` and never checked `z`. A list named `sticks07` held stick 0. Rule: after copying a test, change the values its name promises; compare whole objects with `toEqual` instead of field by field.
+- **`throws` passed for the wrong error (K8).** See T6.
+- **A signature change moved the meaning of an argument (K8).** `simulate(start, params, input, duration, dt)` became `simulate(start, params, inputs, dt)`, and an old `30` (seconds) silently became `dt = 30`. Both are numbers, so `tsc` could not catch it. Rule: when a signature changes, re-read every argument at every call site, not just the ones the compiler flags.

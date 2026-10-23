@@ -1,7 +1,7 @@
 export type State = {
-    z: number;                        // height
-    v: number;                        // velocity
-    motor: number;                    // motor output
+    readonly z: number;                        // height
+    readonly v: number;                        // velocity
+    readonly motor: number;                    // motor output
 };
 
 export type Params = {
@@ -17,7 +17,11 @@ export type Params = {
 }
 
 export type Input = {
-    stick: number,                   // between 0-1
+    stick: number,                             // between 0-1
 }
 
+export type Sample = {
+    time: number,                              // seconds since recording start
+    input: Input
+}
 
