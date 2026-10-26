@@ -1,3 +1,4 @@
+import { clamp } from "../math/clamp";
 import { bisect } from "../math/solve";
 import type {Params, Input} from './types';
 
@@ -24,6 +25,6 @@ export function findStickForOutput(target: number, mid: number, expo: number): n
 }
 
 export function motorCommand(params: Params, input: Input): number{
-    const stick = Math.min(1, Math.max(0, input.stick));               
+    const stick = clamp(input.stick, 0, 1);               
     return applyThrottleCurve(stick, params.mid, params.expo);
 };
